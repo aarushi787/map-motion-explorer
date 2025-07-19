@@ -1,12 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
+import L from 'leaflet';
+import 'leaflet/dist/leaflet.css';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Play, Pause, RotateCcw, MapPin, Clock, Gauge } from 'lucide-react';
 import { toast } from 'sonner';
+
+// Fix for default marker icons in Leaflet
+delete (L.Icon.Default.prototype as any)._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon-2x.png',
+  iconUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-icon.png',
+  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+});
 
 interface RoutePoint {
   latitude: number;
@@ -16,11 +22,11 @@ interface RoutePoint {
 
 const VehicleMap = () => {
   const mapContainer = useRef<HTMLDivElement>(null);
-  const map = useRef<mapboxgl.Map | null>(null);
-  const vehicleMarker = useRef<mapboxgl.Marker | null>(null);
+  const map = useRef<L.Map | null>(null);
+  const vehicleMarker = useRef<L.Marker | null>(null);
+  const routeLine = useRef<L.Polyline | null>(null);
+  const activeLine = useRef<L.Polyline | null>(null);
   
-  const [mapboxToken, setMapboxToken] = useState('');
-  const [isTokenValid, setIsTokenValid] = useState(false);
   const [routeData, setRouteData] = useState<RoutePoint[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -46,117 +52,90 @@ const VehicleMap = () => {
       });
   }, []);
 
-  // Initialize map when token is provided
+  // Initialize map
   useEffect(() => {
-    if (!mapboxToken || !mapContainer.current || !routeData.length) return;
+    if (!mapContainer.current || !routeData.length || map.current) return;
 
-    mapboxgl.accessToken = mapboxToken;
-    
-    try {
-      map.current = new mapboxgl.Map({
-        container: mapContainer.current,
-        style: 'mapbox://styles/mapbox/dark-v11',
-        center: [routeData[0].longitude, routeData[0].latitude],
-        zoom: 15,
-        pitch: 45,
-        bearing: 30
-      });
+    // Initialize Leaflet map
+    map.current = L.map(mapContainer.current).setView(
+      [routeData[0].latitude, routeData[0].longitude], 
+      15
+    );
 
-      map.current.addControl(new mapboxgl.NavigationControl(), 'top-right');
-      
-      map.current.on('load', () => {
-        if (!map.current) return;
-        
-        // Add route source and layer
-        const routeCoordinates = routeData.map(point => [point.longitude, point.latitude]);
-        
-        map.current.addSource('route', {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            properties: {},
-            geometry: {
-              type: 'LineString',
-              coordinates: routeCoordinates
-            }
+    // Add OpenStreetMap tiles
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap contributors',
+      maxZoom: 19,
+    }).addTo(map.current);
+
+    // Create custom vehicle icon
+    const vehicleIcon = L.divIcon({
+      html: `
+        <div style="
+          width: 24px; 
+          height: 24px; 
+          background: #00bfff; 
+          border: 3px solid white; 
+          border-radius: 50%; 
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          animation: pulse 2s infinite;
+        ">
+          <div style="
+            width: 8px; 
+            height: 8px; 
+            background: white; 
+            border-radius: 50%;
+          "></div>
+        </div>
+        <style>
+          @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.8; }
           }
-        });
+        </style>
+      `,
+      className: 'vehicle-marker',
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    });
 
-        map.current.addLayer({
-          id: 'route-line',
-          type: 'line',
-          source: 'route',
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round'
-          },
-          paint: {
-            'line-color': '#00bfff',
-            'line-width': 4,
-            'line-opacity': 0.8
-          }
-        });
+    // Add vehicle marker
+    vehicleMarker.current = L.marker(
+      [routeData[0].latitude, routeData[0].longitude],
+      { icon: vehicleIcon }
+    ).addTo(map.current);
 
-        // Add active route layer
-        map.current.addSource('active-route', {
-          type: 'geojson',
-          data: {
-            type: 'Feature',
-            properties: {},
-            geometry: {
-              type: 'LineString',
-              coordinates: []
-            }
-          }
-        });
+    // Add complete route line (gray)
+    const routeCoordinates: L.LatLngExpression[] = routeData.map(point => [point.latitude, point.longitude]);
+    routeLine.current = L.polyline(routeCoordinates, {
+      color: '#94a3b8',
+      weight: 4,
+      opacity: 0.6
+    }).addTo(map.current);
 
-        map.current.addLayer({
-          id: 'active-route-line',
-          type: 'line',
-          source: 'active-route',
-          layout: {
-            'line-join': 'round',
-            'line-cap': 'round'
-          },
-          paint: {
-            'line-color': '#00ff00',
-            'line-width': 6,
-            'line-opacity': 1
-          }
-        });
+    // Add active route line (blue)
+    activeLine.current = L.polyline([], {
+      color: '#00bfff',
+      weight: 6,
+      opacity: 1
+    }).addTo(map.current);
 
-        // Create vehicle marker
-        const vehicleElement = document.createElement('div');
-        vehicleElement.innerHTML = `
-          <div class="w-6 h-6 bg-vehicle rounded-full border-2 border-white shadow-lg animate-vehicle-pulse flex items-center justify-center">
-            <div class="w-2 h-2 bg-white rounded-full"></div>
-          </div>
-        `;
-        
-        vehicleMarker.current = new mapboxgl.Marker({ element: vehicleElement })
-          .setLngLat([routeData[0].longitude, routeData[0].latitude])
-          .addTo(map.current);
+    // Fit map to route bounds
+    const bounds = L.latLngBounds(routeCoordinates);
+    map.current.fitBounds(bounds, { padding: [20, 20] });
 
-        setIsTokenValid(true);
-        toast.success('Map loaded successfully!');
-      });
-
-      map.current.on('error', (e) => {
-        console.error('Mapbox error:', e);
-        setIsTokenValid(false);
-        toast.error('Invalid Mapbox token or map loading error');
-      });
-
-    } catch (error) {
-      console.error('Error initializing map:', error);
-      setIsTokenValid(false);
-      toast.error('Failed to initialize map');
-    }
+    toast.success('Map loaded successfully!');
 
     return () => {
-      map.current?.remove();
+      if (map.current) {
+        map.current.remove();
+        map.current = null;
+      }
     };
-  }, [mapboxToken, routeData]);
+  }, [routeData]);
 
   // Vehicle movement simulation
   useEffect(() => {
@@ -175,20 +154,20 @@ const VehicleMap = () => {
 
           // Update vehicle marker position
           if (vehicleMarker.current) {
-            vehicleMarker.current.setLngLat([currentPoint.longitude, currentPoint.latitude]);
+            vehicleMarker.current.setLatLng([currentPoint.latitude, currentPoint.longitude]);
           }
 
           // Update active route
-          if (map.current && map.current.getSource('active-route')) {
-            const activeCoordinates = routeData.slice(0, nextIndex + 1).map(point => [point.longitude, point.latitude]);
-            (map.current.getSource('active-route') as mapboxgl.GeoJSONSource).setData({
-              type: 'Feature',
-              properties: {},
-              geometry: {
-                type: 'LineString',
-                coordinates: activeCoordinates
-              }
-            });
+          if (activeLine.current) {
+            const activeCoordinates: L.LatLngExpression[] = routeData
+              .slice(0, nextIndex + 1)
+              .map(point => [point.latitude, point.longitude]);
+            activeLine.current.setLatLngs(activeCoordinates);
+          }
+
+          // Pan map to follow vehicle
+          if (map.current) {
+            map.current.panTo([currentPoint.latitude, currentPoint.longitude]);
           }
 
           // Calculate speed
@@ -262,69 +241,20 @@ const VehicleMap = () => {
       setCurrentPosition(routeData[0]);
       
       if (vehicleMarker.current) {
-        vehicleMarker.current.setLngLat([routeData[0].longitude, routeData[0].latitude]);
+        vehicleMarker.current.setLatLng([routeData[0].latitude, routeData[0].longitude]);
       }
 
-      if (map.current && map.current.getSource('active-route')) {
-        (map.current.getSource('active-route') as mapboxgl.GeoJSONSource).setData({
-          type: 'Feature',
-          properties: {},
-          geometry: {
-            type: 'LineString',
-            coordinates: []
-          }
-        });
+      if (activeLine.current) {
+        activeLine.current.setLatLngs([]);
+      }
+
+      if (map.current) {
+        map.current.setView([routeData[0].latitude, routeData[0].longitude], 15);
       }
     }
     
     toast.info('Vehicle position reset');
   };
-
-  const validateToken = () => {
-    if (mapboxToken.trim()) {
-      // The map initialization will handle validation
-      toast.info('Validating Mapbox token...');
-    } else {
-      toast.error('Please enter a valid Mapbox token');
-    }
-  };
-
-  if (!isTokenValid) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-background via-background to-accent/10 p-4 flex items-center justify-center">
-        <Card className="w-full max-w-md p-6 bg-card/90 backdrop-blur-sm border-accent/20 shadow-xl">
-          <div className="space-y-4">
-            <div className="text-center">
-              <h2 className="text-2xl font-bold text-foreground mb-2">Vehicle Tracking System</h2>
-              <p className="text-muted-foreground">Enter your Mapbox token to get started</p>
-            </div>
-            
-            <div className="space-y-2">
-              <Label htmlFor="mapbox-token">Mapbox Public Token</Label>
-              <Input
-                id="mapbox-token"
-                type="text"
-                placeholder="pk.ey..."
-                value={mapboxToken}
-                onChange={(e) => setMapboxToken(e.target.value)}
-                className="bg-muted/50"
-              />
-              <p className="text-xs text-muted-foreground">
-                Get your token from{' '}
-                <a href="https://mapbox.com/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                  mapbox.com
-                </a>
-              </p>
-            </div>
-            
-            <Button onClick={validateToken} className="w-full bg-gradient-to-r from-primary to-accent">
-              Initialize Map
-            </Button>
-          </div>
-        </Card>
-      </div>
-    );
-  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -339,11 +269,12 @@ const VehicleMap = () => {
               onClick={isPlaying ? handlePause : handlePlay}
               variant="default"
               className="bg-gradient-to-r from-primary to-accent animate-glow"
+              disabled={!routeData.length}
             >
               {isPlaying ? <Pause className="w-4 h-4 mr-2" /> : <Play className="w-4 h-4 mr-2" />}
               {isPlaying ? 'Pause' : 'Play'}
             </Button>
-            <Button onClick={handleReset} variant="secondary">
+            <Button onClick={handleReset} variant="secondary" disabled={!routeData.length}>
               <RotateCcw className="w-4 h-4 mr-2" />
               Reset
             </Button>
@@ -355,6 +286,14 @@ const VehicleMap = () => {
         {/* Map */}
         <div className="flex-1 relative">
           <div ref={mapContainer} className="w-full h-full" />
+          {!routeData.length && (
+            <div className="absolute inset-0 flex items-center justify-center bg-muted/50">
+              <div className="text-center">
+                <div className="text-lg font-semibold text-foreground mb-2">Loading route data...</div>
+                <div className="text-muted-foreground">Please wait while we load the vehicle tracking data</div>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Sidebar */}
@@ -421,11 +360,26 @@ const VehicleMap = () => {
               <div className="w-full bg-muted rounded-full h-2">
                 <div
                   className="bg-gradient-to-r from-primary to-accent h-2 rounded-full transition-all duration-500"
-                  style={{ width: `${((currentIndex + 1) / routeData.length) * 100}%` }}
+                  style={{ width: `${routeData.length ? ((currentIndex + 1) / routeData.length) * 100 : 0}%` }}
                 />
               </div>
               <div className="text-center text-xs text-muted-foreground">
-                {(((currentIndex + 1) / routeData.length) * 100).toFixed(1)}% Complete
+                {routeData.length ? (((currentIndex + 1) / routeData.length) * 100).toFixed(1) : 0}% Complete
+              </div>
+            </div>
+          </Card>
+
+          {/* Map Info */}
+          <Card className="p-4 bg-gradient-to-br from-secondary/50 to-info/10 border-info/20">
+            <h3 className="font-semibold text-foreground mb-3">Map Information</h3>
+            <div className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Map Provider:</span>
+                <span className="text-foreground">OpenStreetMap</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">No Token Required:</span>
+                <span className="text-success">✓ Free & Open</span>
               </div>
             </div>
           </Card>
