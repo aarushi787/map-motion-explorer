@@ -52,6 +52,10 @@ export default {
 					DEFAULT: 'hsl(var(--card))',
 					foreground: 'hsl(var(--card-foreground))'
 				},
+				vehicle: 'hsl(var(--vehicle-primary))',
+				route: 'hsl(var(--route-color))',
+				warning: 'hsl(var(--warning))',
+				success: 'hsl(var(--success))',
 				sidebar: {
 					DEFAULT: 'hsl(var(--sidebar-background))',
 					foreground: 'hsl(var(--sidebar-foreground))',
@@ -84,11 +88,40 @@ export default {
 					to: {
 						height: '0'
 					}
+				},
+				'vehicle-pulse': {
+					'0%, 100%': {
+						opacity: '1',
+						transform: 'scale(1)'
+					},
+					'50%': {
+						opacity: '0.8',
+						transform: 'scale(1.1)'
+					}
+				},
+				'route-draw': {
+					'0%': {
+						strokeDashoffset: '100%'
+					},
+					'100%': {
+						strokeDashoffset: '0%'
+					}
+				},
+				'glow': {
+					'0%, 100%': {
+						boxShadow: '0 0 20px hsl(200 100% 50% / 0.3)'
+					},
+					'50%': {
+						boxShadow: '0 0 30px hsl(200 100% 50% / 0.6)'
+					}
 				}
 			},
 			animation: {
 				'accordion-down': 'accordion-down 0.2s ease-out',
-				'accordion-up': 'accordion-up 0.2s ease-out'
+				'accordion-up': 'accordion-up 0.2s ease-out',
+				'vehicle-pulse': 'vehicle-pulse 2s ease-in-out infinite',
+				'route-draw': 'route-draw 0.5s ease-out',
+				'glow': 'glow 2s ease-in-out infinite'
 			}
 		}
 	},
